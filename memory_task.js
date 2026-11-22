@@ -3,7 +3,7 @@
    Browser-first prototype; never uploads data. 2026-11. */
 (function(root){
 'use strict';
-const VERSION='memory-task-v2.8';
+const VERSION='memory-task-v2.9';
 const CSS=`
 .pmm-root,.pmm-root *{box-sizing:border-box}
 .pmm-root{position:fixed;inset:0;z-index:10;width:100vw;height:100vh;min-height:100vh;overflow-y:auto;background:#f2f5fa;color:#1b324b;font:16px/1.55 system-ui,-apple-system,Segoe UI,Arial,sans-serif;padding:28px 12px}
@@ -77,7 +77,7 @@ class MemorySession{
   this.audio=null;this.step=0;this.listIndex=0;this.studyIndex=0;this.cuedIndex=0;this.current=null;
   this.currentSlots=[];this.timer=null;this.ended=false;this.phase='instructions';
   this.studyTrialRows=[];this.toneRows=[];this.memoryRows=[];this.freeTargetRows=[];this.freeWordRows=[];this.listSummaries=[];
-  this.instructionEvents=[];this.visibilityEvents=[];this.fullscreenEvents=[];this.extraToneKeys=[];this.postQuestions=null;
+  this.instructionEvents=[];this.visibilityEvents=[];this.fullscreenEvents=[];this.extraToneKeys=[];this.checkpointErrors=[];this.postQuestions=null;
   this.startedAt=new Date().toISOString();this.studySessionStart=null;
   this.studyKey=e=>this.handleStudyKey(e);this.visibilityHandler=()=>{
    if(document.hidden&&this.phase==='study')this.visibilityEvents.push({phase:'study',list:this.listIndex+1,position:this.studyIndex+1,timestamp:new Date().toISOString()});
@@ -86,12 +86,17 @@ class MemorySession{
   this.showInstruction();
  }
  checkpoint(eventType,payload){
-  // Each tiny event (<16 KiB) is streamed by DataPipe as soon as it is written;
-  // the original full nested JSON session is still included at task completion.
-  if(typeof this.opts.onProgress==='function'){
+  // Checkpoints are best-effort: a streaming exception must NEVER block a
+  // participant's recall response, the next word, or the final questionnaire.
+  // The complete nested task data is still handed to jsPsych at completion.
+  if(typeof this.opts.onProgress!=='function')return;
+  try{
    this.opts.onProgress({phase:'memory_checkpoint',event_type:eventType,
      participant_id:this.opts.participantId||null,
      assignment:this.plan.assignment,recorded_at:new Date().toISOString(),...payload});
+  }catch(error){
+   this.checkpointErrors.push({event_type:eventType,recorded_at:new Date().toISOString(),error:String(error)});
+   console.error('Nonfatal memory checkpoint error:',eventType,error);
   }
  }
  render(title,html){ensureStyles();this.element.innerHTML=`<div class="pmm-root"><main class="pmm-card"><h1>${title}</h1>${html}</main></div>`;}
@@ -277,11 +282,13 @@ class MemorySession{
     rt_from_recall_start_ms:Math.round(now-this.testStart),
     rt_since_previous_submission_ms:Math.round(now-this.lastFreeSubmissionAt)};
    this.freeCurrentEntries.push(row);this.freeWordRows.push(row);
-   this.checkpoint('free_recall_word',{list:list.list,response:row});
    this.lastFreeSubmissionAt=now;
+   // Finish participant-facing submission first. A network/save issue must not
+   // keep a word in the textbox or prevent additional free-recall responses.
    input.value=''; // Do not show submitted words or a cumulative recall list.
    status.classList.remove('pmm-free-error');status.textContent='';
    input.focus();
+   this.checkpoint('free_recall_word',{list:list.list,response:row});
   };
   this.element.querySelector('#pmm-free-finish').onclick=()=>{
    if(input.value.trim()){
@@ -370,7 +377,7 @@ class MemorySession{
   pair_assignments:this.plan.lists.flatMap(list=>list.pairs),started_at:this.startedAt,ended_at:this.finishedAt||null,
   instructions:this.instructionEvents,study_trials:this.studyTrialRows,tone_responses:this.toneRows,
   memory_responses:this.memoryRows,free_recall_word_responses:this.freeWordRows,free_recall_p1_scoring:this.freeTargetRows,list_summaries:this.listSummaries,
-  visibility_events:this.visibilityEvents,fullscreen_events:this.fullscreenEvents,extra_keypresses:this.extraToneKeys,post_questions:this.postQuestions};}
+  visibility_events:this.visibilityEvents,fullscreen_events:this.fullscreenEvents,extra_keypresses:this.extraToneKeys,checkpoint_errors:this.checkpointErrors,post_questions:this.postQuestions};}
  destroy(){clearTimeout(this.timer);document.removeEventListener('keydown',this.studyKey);document.removeEventListener('visibilitychange',this.visibilityHandler);
   if(this.audio&&this.audio.state!=='closed')this.audio.close().catch(()=>{});}
 }
