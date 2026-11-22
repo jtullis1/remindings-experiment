@@ -19,8 +19,8 @@ const CONFIG=Object.freeze({
 });
 const CSS=`
 .pmt-host,.pmt-host *{box-sizing:border-box}
-.pmt-host{min-height:100vh;background:#f2f5fa;color:#19324b;font:15px/1.5 system-ui,-apple-system,Segoe UI,Arial,sans-serif;padding:28px 12px}
-.pmt-card{max-width:630px;margin:0 auto;background:white;border:1px solid #d9e3ef;border-radius:14px;padding:36px 40px;box-shadow:0 10px 30px #18324a0e}
+.pmt-host{position:fixed;inset:0;z-index:10;width:100vw;height:100vh;min-height:100vh;overflow-y:auto;background:#f2f5fa;color:#19324b;font:15px/1.5 system-ui,-apple-system,Segoe UI,Arial,sans-serif;padding:28px 12px}
+.pmt-card{max-width:630px;margin:0 auto;background:transparent;border:0;border-radius:0;padding:36px 40px;box-shadow:none}
 .pmt-card h1{font-size:26px;line-height:1.22;margin:0 0 20px}
 .pmt-card h2{font-size:20px;margin:0 0 10px}
 .pmt-eyebrow{color:#527090;font-size:12px;letter-spacing:.04em;text-transform:uppercase;font-weight:750}
@@ -33,7 +33,7 @@ const CSS=`
 .pmt-btn.danger{color:#7c2e37;border-color:#e6bec5;background:#fffafa}
 .pmt-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:28px}
 .pmt-trial{margin:16px auto;padding:45px 12px 34px;max-width:550px;text-align:center;background:#f3f7fc;border:1px solid #d5e1f0;border-radius:12px}
-.pmt-trial-minimal{background:#fff;border:0;padding:58px 12px 38px;margin:12px auto 0}.pmt-keys-large{font-size:16px;font-weight:600;margin:12px auto 32px}.pmt-minimal-actions{display:flex;justify-content:center;margin-top:38px}.pmt-fix{font-size:56px;font-weight:450;line-height:1.3}.pmt-response{min-height:34px;text-align:center;font-weight:650}
+.pmt-trial-minimal{background:transparent;border:0;padding:58px 12px 38px;margin:12px auto 0}.pmt-keys-large{font-size:16px;font-weight:600;margin:12px auto 32px}.pmt-minimal-actions{display:flex;justify-content:center;margin-top:38px}.pmt-fix{font-size:56px;font-weight:450;line-height:1.3}.pmt-response{min-height:34px;text-align:center;font-weight:650}
 .pmt-progress{height:8px;background:#e5ebf4;border-radius:15px;overflow:hidden;margin:14px 0}
 .pmt-progress>div{height:100%;background:#4385ba}
 .pmt-pass{padding:12px;background:#f4f9f4;border-left:4px solid #20836a;margin:15px 0}

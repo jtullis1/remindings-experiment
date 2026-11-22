@@ -3,11 +3,11 @@
    Browser-first prototype; never uploads data. 2026-11. */
 (function(root){
 'use strict';
-const VERSION='memory-task-v2.3';
+const VERSION='memory-task-v2.6';
 const CSS=`
 .pmm-root,.pmm-root *{box-sizing:border-box}
-.pmm-root{min-height:100vh;background:#f2f5fa;color:#1b324b;font:16px/1.55 system-ui,-apple-system,Segoe UI,Arial,sans-serif;padding:28px 12px}
-.pmm-card{width:min(100%,690px);background:#fff;border:1px solid #dce5ef;border-radius:14px;padding:38px 42px;margin:20px auto;box-shadow:0 7px 28px #1d2c4010}
+.pmm-root{position:fixed;inset:0;z-index:10;width:100vw;height:100vh;min-height:100vh;overflow-y:auto;background:#f2f5fa;color:#1b324b;font:16px/1.55 system-ui,-apple-system,Segoe UI,Arial,sans-serif;padding:28px 12px}
+.pmm-card{width:min(100%,690px);background:transparent;border:0;border-radius:0;padding:38px 42px;margin:20px auto;box-shadow:none}
 .pmm-card h1{font-size:26px;line-height:1.2;margin:0 0 18px}.pmm-card p{margin:12px 0}.pmm-hint{font-size:14px;color:#586d82}
 .pmm-btn{font:inherit;font-weight:650;color:#fff;background:#216ea7;border:0;border-radius:8px;padding:12px 22px;cursor:pointer;min-width:115px}
 .pmm-btn:hover{background:#175784}.pmm-btn:disabled{opacity:.5;cursor:not-allowed}.pmm-btn-secondary{color:#284967;background:white;border:1px solid #b7cbdf}
@@ -196,7 +196,7 @@ class MemorySession{
   const cue=list.memory_test.trials[this.cuedIndex];
   ensureStyles();
   this.element.innerHTML=`<div class="pmm-root pmm-cued-root"><main class="pmm-cued-panel">
-    <div class="pmm-cued-prompt">${safe(cue.extra_list_cue)} &ndash; ${safe(cue.first_letter)}....</div>
+    <div class="pmm-cued-prompt">${safe(cue.extra_list_cue)} &ndash; ${safe(cue.first_letter)}___</div>
     <form id="pmm-cued-form" class="pmm-form">
       <input id="pmm-answer" class="pmm-cued-input" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" aria-label="Type the full studied word" aria-describedby="pmm-cued-error" />
       <div class="pmm-cued-actions"><button class="pmm-btn" type="submit">${this.cuedIndex===15?'Finish this test':'Next'}</button></div>
@@ -293,20 +293,38 @@ class MemorySession{
    <div class="pmm-actions"><button id="pmm-final-continue" class="pmm-btn">Continue to questions</button></div>`);
   this.element.querySelector('#pmm-final-continue').onclick=()=>this.showPostQuestions();
  }
- showPostQuestions(){this.phase='questionnaire';
+ showPostQuestions(){
+  // Exactly one final question per screen; retain the original four data fields.
+  this.phase='questionnaire';this.postQuestionIndex=0;
+  this.postQuestions={noticed_pattern:'',reminding_frequency:'',reminding_intentionality:'',strategies:''};
+  this.showPostQuestionPage();
+ }
+ showPostQuestionPage(){
+  const questions=[
+   {field:'noticed_pattern',id:'pmm-pattern',prompt:'Did you notice a pattern in how the words were presented?',kind:'text',placeholder:'What did you notice, if anything?'},
+   {field:'reminding_frequency',id:'pmm-remind',prompt:'How often did a word remind you of an earlier word?',kind:'select',options:['Never','Rarely','Sometimes','Often','Very often']},
+   {field:'reminding_intentionality',id:'pmm-intention',prompt:'When earlier words came to mind, was this spontaneous or deliberate?',kind:'select',options:['Earlier words did not come to mind','Mostly spontaneous','Both spontaneous and deliberate','Mostly deliberate']},
+   {field:'strategies',id:'pmm-strategies',prompt:'Did you use any strategies to remember the words?',kind:'text'}
+  ];
+  const index=this.postQuestionIndex,question=questions[index];
+  if(!question){this.finish();return;}
+  const value=this.postQuestions[question.field]||'';
+  const control=question.kind==='text'
+   ? `<textarea class="pmm-textarea pmm-post-textarea" id="${question.id}" ${question.placeholder?`placeholder="${safe(question.placeholder)}"`:''}>${safe(value)}</textarea>`
+   : `<select class="pmm-select" id="${question.id}" required><option value="">Choose one</option>${question.options.map(option=>`<option value="${safe(option)}"${option===value?' selected':''}>${safe(option)}</option>`).join('')}</select>`;
   this.render('A few final questions',`<form id="pmm-post">
-   <label class="pmm-q-label" for="pmm-pattern">Did you notice a pattern in how the words were presented?</label>
-   <textarea class="pmm-textarea" style="min-height:95px" id="pmm-pattern" placeholder="What did you notice, if anything?"></textarea>
-   <label class="pmm-q-label" for="pmm-remind">How often did a word remind you of an earlier word?</label>
-   <select class="pmm-select" id="pmm-remind" required><option value="">Choose one</option><option>Never</option><option>Rarely</option><option>Sometimes</option><option>Often</option><option>Very often</option></select>
-   <label class="pmm-q-label" for="pmm-intention">When earlier words came to mind, was this spontaneous or deliberate?</label>
-   <select class="pmm-select" id="pmm-intention" required><option value="">Choose one</option><option>Earlier words did not come to mind</option><option>Mostly spontaneous</option><option>Both spontaneous and deliberate</option><option>Mostly deliberate</option></select>
-   <label class="pmm-q-label" for="pmm-strategies">Did you use any strategies to remember the words?</label>
-   <textarea class="pmm-textarea" style="min-height:95px" id="pmm-strategies"></textarea>
-   <div class="pmm-actions"><button type="submit" class="pmm-btn">Finish experiment</button></div></form>`);
-  this.element.querySelector('#pmm-post').onsubmit=e=>{e.preventDefault();const by=id=>this.element.querySelector('#'+id).value;
-   this.postQuestions={noticed_pattern:by('pmm-pattern'),reminding_frequency:by('pmm-remind'),reminding_intentionality:by('pmm-intention'),strategies:by('pmm-strategies')};
-   this.finish();
+   <p class="pmm-hint">Question ${index+1} of ${questions.length}</p>
+   <label class="pmm-q-label" for="${question.id}">${safe(question.prompt)}</label>
+   ${control}
+   <div class="pmm-actions"><button type="submit" class="pmm-btn">${index===questions.length-1?'Finish experiment':'Next'}</button></div>
+   </form>`);
+  this.element.querySelector('#pmm-post').onsubmit=e=>{
+   e.preventDefault();
+   const input=this.element.querySelector('#'+question.id);
+   if(!input.reportValidity())return;
+   this.postQuestions[question.field]=input.value;
+   this.postQuestionIndex++;
+   this.showPostQuestionPage();
   };
  }
  finish(){this.ended=true;this.phase='completed';this.finishedAt=new Date().toISOString();
