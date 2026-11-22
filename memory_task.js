@@ -3,7 +3,7 @@
    Provides progress checkpoints and a complete trial record for jsPsych/DataPipe. 2026-11. */
 (function(root){
 'use strict';
-const VERSION='memory-task-v3.0';
+const VERSION='memory-task-v3.1';
 const CSS=`
 .pmm-root,.pmm-root *{box-sizing:border-box}
 .pmm-root{position:fixed;inset:0;z-index:10;width:100vw;height:100vh;min-height:100vh;overflow-y:auto;background:#f2f5fa;color:#1b324b;font:16px/1.55 system-ui,-apple-system,Segoe UI,Arial,sans-serif;padding:28px 12px}
@@ -422,7 +422,16 @@ class MemoryTaskPlugin{
   this.controller=mount(display_element,{plan,participantId:pid,
    // These event checkpoints cause @jspsych/extension-pipe to stage the data as the
    // long-running custom trial progresses, not just after all four lists finish.
-   onProgress:record=>this.jsPsych.data.write(record),
+   onProgress:record=>{
+    // jsPsych 8 data.write() expects a trial object with getResult(), not a raw
+    // checkpoint record. Store the plain data item in the collection instead.
+    this.jsPsych.data.get().push(record);
+    // extension-pipe stages data via the global on_data_update callback.
+    // Because this custom memory task is one long jsPsych trial, explicitly
+    // notify the installed callback at every checkpoint for partial recovery.
+    const onDataUpdate=this.jsPsych.getInitSettings().on_data_update;
+    if(typeof onDataUpdate==='function')onDataUpdate(record);
+   },
    onComplete:data=>this.jsPsych.finishTrial(data)});
  }
 }
