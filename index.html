@@ -1,0 +1,57 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Word memory experiment — DataPipe integration v2.5</title>
+<link rel="stylesheet" href="https://unpkg.com/jspsych@8.2.2/css/jspsych.css"/>
+<script src="https://unpkg.com/jspsych@8.2.2"></script>
+<script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response@2.2.0"></script>
+<script src="https://unpkg.com/@jspsych/extension-pipe@0.2.0"></script>
+<script src="consent_page.js"></script><script src="tone_training.js"></script><script src="stimuli.js"></script><script src="list_generator.js"></script><script src="memory_task.js"></script>
+</head><body><script>
+// DataPipe experiment created by the researcher. Do not put Prolific IDs in filenames.
+const DATAPIPE_EXPERIMENT_ID = 'MwRoa1tkpwZQ';
+const offlinePreview = location.protocol !== 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname);
+// HTTPS-hosted studies automatically save; offline/local previews never contact live DataPipe.
+const subjectFileId = 's_' + (
+  (globalThis.crypto && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID().replaceAll('-', '')
+    : Math.random().toString(36).slice(2) + Date.now().toString(36)
+);
+const jsPsych = initJsPsych({
+  extensions: [{
+    type: jsPsychExtensionPipe,
+    params: {
+      experiment_id: DATAPIPE_EXPERIMENT_ID,
+      filename: () => `${subjectFileId}.json`,
+      format: 'json',
+      stream: true,
+      enabled: !offlinePreview,
+      wait_message: '<p>Saving your responses. Please do not close this page.</p>',
+      done_message: '<p>Thank you for completing the experiment.</p><p>You may close this page.</p>',
+      on_save: (result) => {
+        if (!result.ok) {
+          document.body.innerHTML = '<main style="max-width:650px;margin:15vh auto;font:18px system-ui;padding:25px"><h2>There was a problem saving your responses</h2><p>Please do not close this page. Contact the researcher at <a href="mailto:tullis@arizona.edu">tullis@arizona.edu</a>.</p></main>';
+          console.error('DataPipe final save failed:', result);
+        }
+      }
+    }
+  }],
+  on_finish: () => {
+    // Do NOT redirect to Prolific yet: a real Prolific completion code hasn't been supplied.
+    // Once set up, a tested completion URL can be added here.
+    if (offlinePreview) {
+      const data = jsPsych.data.get().json();
+      const blob = new Blob([data], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      document.body.innerHTML = '<main style="max-width:650px;margin:12vh auto;text-align:center;font:18px system-ui"><h2>Local preview complete</h2><p>No data were uploaded. Download the local test data if needed.</p><a id="local-data-link" download="local_test_data.json" href="' + url + '">Download local test data</a></main>';
+    }
+  }
+});
+const consent = PairedMemoryConsent.makeJsPsychTrial(jsPsych);
+const training = {timeline: [{type: PairedMemoryToneTraining.ToneTrainingPlugin}],
+  conditional_function: () => PairedMemoryConsent.state.consented === true};
+const memory = {timeline: [{type: PairedMemoryTask.MemoryTaskPlugin}],
+  conditional_function: () => PairedMemoryConsent.state.consented === true &&
+    jsPsych.data.get().filter({criterion_passed:true}).count() > 0};
+const declined = {timeline: [{type:jsPsychHtmlKeyboardResponse,
+  stimulus: PairedMemoryConsent.declineMarkup(), choices:'NO_KEYS'}],
+  conditional_function: () => PairedMemoryConsent.state.consented !== true};
+jsPsych.run([consent,training,memory,declined]);
+</script></body></html>
