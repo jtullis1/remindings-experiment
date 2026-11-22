@@ -5,7 +5,7 @@
 */
 (function(root){
 'use strict';
-const VERSION='tone-training-2.0.0';
+const VERSION='tone-training-2.0.1';
 const CONFIG=Object.freeze({
   frequencies:Object.freeze({1:400,2:650,3:1000}),
   toneDurationMs:450,
@@ -46,9 +46,6 @@ const CSS=`
 .pmt-keyline b{display:block;font-size:20px;color:#153c60}
 .pmt-demo-key{font-size:35px;font-weight:750;color:#176bb2;line-height:1.3;margin:10px 0 16px}
 .pmt-demo-key small{display:block;font-size:15px;font-weight:500;color:#50677d}
-.pmt-details{margin-top:25px;padding-top:12px;border-top:1px solid #e0e7ef;color:#5c6e81;font-size:13px}
-.pmt-details summary{cursor:pointer}
-.pmt-details .pmt-actions{margin-top:12px}
 .pmt-message{min-height:22px;color:#445f76}
 @media(max-width:560px){.pmt-card{padding:24px 18px}.pmt-keyline{gap:6px}.pmt-keyline span{padding:10px 4px}}
 @media(max-width:560px){.pmt-card{padding:20px 14px}.pmt-map{grid-template-columns:1fr}.pmt-grid{grid-template-columns:1fr}}
@@ -56,8 +53,6 @@ const CSS=`
 function ensureStyles(){if(!document.getElementById('pmt-styles')){const s=document.createElement('style');s.id='pmt-styles';s.textContent=CSS;document.head.appendChild(s)}}
 function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
 function balancedSequence(){return shuffle([1,1,1,1,2,2,2,2,3,3,3,3]);}
-function csvEscape(v){let s=v===null||v===undefined?'':String(v);return '"'+s.replaceAll('"','""')+'"';}
-function downloadFile(name,content,mime){const b=new Blob([content],{type:mime});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 class TrainingSession{
  constructor(element,opts={}){
   this.element=element;this.opts=opts;this.phase='familiarization';this.audio=null;
@@ -247,12 +242,7 @@ class TrainingSession{
  drawPass(a){this.phase='passed';this.shell('Training complete',`
   <p>You can continue to the memory task.</p>
   ${typeof this.opts.onComplete==='function'?'<div class="pmt-actions"><button class="pmt-btn primary" id="pmt-next">Continue</button></div>':''}
-  <details class="pmt-details"><summary>Download training data (prototype)</summary>
-   <div class="pmt-actions"><button class="pmt-btn" id="pmt-csv">Response CSV</button><button class="pmt-btn" id="pmt-familiar-csv">Initial keypress CSV</button><button class="pmt-btn" id="pmt-json">Complete JSON</button></div>
-  </details>`);
-  this.element.querySelector('#pmt-csv').onclick=()=>this.downloadCsv();
-  this.element.querySelector('#pmt-familiar-csv').onclick=()=>this.downloadFamiliarizationCsv();
-  this.element.querySelector('#pmt-json').onclick=()=>this.downloadJson();
+  `);
   if(this.element.querySelector('#pmt-next'))this.element.querySelector('#pmt-next').onclick=()=>this.opts.onComplete(this.getData());
  }
  visibility(){if(document.hidden&&this.live){
@@ -276,11 +266,6 @@ class TrainingSession{
   familiarization_rounds:this.familiarizationRound,
   familiarization_keypresses:this.familiarizationEvents.slice(),
   all_attempts:this.attempts.slice(),tone_training_events:this.events.slice(),extra_keypresses:this.extraKeys.slice()};}
- downloadCsv(){const d=this.getData();const heads=['participant_id','phase','assessment_attempt','guided_attempt','trial_in_block','tone_in_trial','tone_in_block','frequency_hz','pitch_name','correct_key','response_key','correct','rt_ms','omission','response_status','planned_tone_onset_ms','tone_duration_ms','block_started_at'];
-  downloadFile('tone_training_events.csv',heads.join(',')+'\n'+d.tone_training_events.map(x=>heads.map(k=>csvEscape(x[k])).join(',')).join('\n'),'text/csv;charset=utf-8');}
- downloadFamiliarizationCsv(){const heads=['participant_id','phase','round','step','frequency_hz','pitch_name','correct_key','response_key','correct','rt_ms','timestamp'];
-  downloadFile('tone_familiarization_keypresses.csv',heads.join(',')+'\n'+this.familiarizationEvents.map(x=>heads.map(k=>csvEscape(x[k])).join(',')).join('\n'),'text/csv;charset=utf-8');}
- downloadJson(){downloadFile('tone_training_complete.json',JSON.stringify(this.getData(),null,2),'application/json');}
  destroy(){this.cancelTimers();this.live=false;document.removeEventListener('keydown',this.keyHandler);document.removeEventListener('visibilitychange',this.focusHandler);if(this.audio)this.audio.close().catch(()=>{});}
 }
 function mount(element,opts){return new TrainingSession(element,opts);}
