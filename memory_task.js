@@ -1,9 +1,9 @@
 /* Memory task: explicit phase transitions, browser fullscreen requests, four timed study lists,
    single-word free recall or extra-list cued recall, and post-study questions.
-   Browser-first prototype; never uploads data. 2026-11. */
+   Provides progress checkpoints and a complete trial record for jsPsych/DataPipe. 2026-11. */
 (function(root){
 'use strict';
-const VERSION='memory-task-v2.9';
+const VERSION='memory-task-v3.0';
 const CSS=`
 .pmm-root,.pmm-root *{box-sizing:border-box}
 .pmm-root{position:fixed;inset:0;z-index:10;width:100vw;height:100vh;min-height:100vh;overflow-y:auto;background:#f2f5fa;color:#1b324b;font:16px/1.55 system-ui,-apple-system,Segoe UI,Arial,sans-serif;padding:28px 12px}
@@ -14,7 +14,9 @@ const CSS=`
 .pmm-actions{display:flex;align-items:center;gap:12px;justify-content:flex-end;margin-top:28px;flex-wrap:wrap}
 .pmm-keymap{display:flex;gap:9px;flex-wrap:wrap;margin:20px 0}
 .pmm-keymap span{border:1px solid #d5e1ed;border-radius:8px;padding:10px 15px;font-weight:550}
-.pmm-study{position:fixed;inset:0;width:100vw;height:100vh;background:#000;display:flex;align-items:center;justify-content:center;padding:20px;z-index:9999}
+/* A top-level overlay centers each word in the actual viewport, not jsPsych’s content column. */
+.pmm-study,.pmm-study *{box-sizing:border-box}
+.pmm-study{position:fixed;inset:0;width:100vw;height:100vh;height:100dvh;margin:0;padding:20px;background:#000;display:grid;place-items:center;z-index:2147483647;transform:none}
 .pmm-word{font:600 clamp(48px,7.5vw,86px)/1.2 system-ui,-apple-system,Segoe UI,Arial,sans-serif;letter-spacing:.025em;color:#fff;text-align:center}
 .pmm-input,.pmm-textarea{width:100%;border:1px solid #aebfd1;border-radius:9px;font:18px system-ui,-apple-system,Segoe UI,Arial,sans-serif;color:#14283d;padding:12px 14px}
 .pmm-textarea{font-size:16px;line-height:1.55;min-height:245px;resize:vertical}
@@ -75,7 +77,7 @@ class MemorySession{
   this.element=element;this.opts=opts;this.plan=opts.plan;
   if(!this.plan||!root.PairedMemoryGenerator.validate(this.plan).ok)throw new Error('A validated study plan is required.');
   this.audio=null;this.step=0;this.listIndex=0;this.studyIndex=0;this.cuedIndex=0;this.current=null;
-  this.currentSlots=[];this.timer=null;this.ended=false;this.phase='instructions';
+  this.currentSlots=[];this.timer=null;this.studyOverlay=null;this.ended=false;this.phase='instructions';
   this.studyTrialRows=[];this.toneRows=[];this.memoryRows=[];this.freeTargetRows=[];this.freeWordRows=[];this.listSummaries=[];
   this.instructionEvents=[];this.visibilityEvents=[];this.fullscreenEvents=[];this.extraToneKeys=[];this.checkpointErrors=[];this.postQuestions=null;
   this.startedAt=new Date().toISOString();this.studySessionStart=null;
@@ -149,7 +151,16 @@ class MemorySession{
   const list=this.plan.lists[this.listIndex],t=list.trials[this.studyIndex];
   if(!t){this.finishStudy();return;}
   this.phase='study';this.current=t;
-  this.element.innerHTML=`<div class="pmm-study"><div class="pmm-word">${safe(t.word)}</div></div>`;
+  // Put the study overlay directly under <body> so jsPsych's centered content
+  // wrapper (or any transformed parent) cannot offset the word from the viewport.
+  if(!this.studyOverlay){
+   ensureStyles();
+   this.studyOverlay=document.createElement('div');
+   this.studyOverlay.className='pmm-study';
+   this.studyOverlay.setAttribute('role','presentation');
+   document.body.appendChild(this.studyOverlay);
+  }
+  this.studyOverlay.innerHTML=`<div class="pmm-word">${safe(t.word)}</div>`;
   const startedPerf=performance.now();
   const toneSlots=t.tone_events.map(ev=>({
    meta:ev,onset:startedPerf+ev.onset_ms, response_key:null,rt_ms:null,correct:false,omission:true,
@@ -208,7 +219,10 @@ class MemorySession{
   else this.finishStudy();
   this.checkpoint('study_word',{list:t.list,study_position:t.position,study_trial:finishedWord,tone_responses:flattened});
  }
- finishStudy(){this.phase='test-instructions';this.current=null;
+ removeStudyOverlay(){
+  if(this.studyOverlay){this.studyOverlay.remove();this.studyOverlay=null;}
+ }
+ finishStudy(){this.removeStudyOverlay();this.phase='test-instructions';this.current=null;
   const cued=this.plan.assignment.test_type==='cued';
   this.render('You finished studying this list',cued?
    `<p>Next, you will take a memory test.</p><p>You will see a <strong>cue word</strong> related to one specific word you studied, along with the <strong>first letter</strong> of that studied word.</p><p>Type the <strong>full studied word</strong>. Enter at least <strong>3 letters</strong> before continuing to the next cue.</p><p class="pmm-hint">Take as much time as you need.</p><div class="pmm-actions"><button class="pmm-btn" id="pmm-test-start">Begin memory test</button></div>`:
@@ -225,7 +239,7 @@ class MemorySession{
   const cue=list.memory_test.trials[this.cuedIndex];
   ensureStyles();
   this.element.innerHTML=`<div class="pmm-root pmm-cued-root"><main class="pmm-cued-panel">
-    <div class="pmm-cued-prompt">${safe(cue.extra_list_cue)} &ndash; ${safe(cue.first_letter)}___</div>
+    <div class="pmm-cued-prompt">${safe(cue.extra_list_cue)} &ndash; ${safe(cue.first_letter)}_</div>
     <form id="pmm-cued-form" class="pmm-form">
       <input id="pmm-answer" class="pmm-cued-input" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" aria-label="Type the full studied word" aria-describedby="pmm-cued-error" />
       <div class="pmm-cued-actions"><button class="pmm-btn" type="submit">${this.cuedIndex===15?'Finish this test':'Next'}</button></div>
@@ -343,7 +357,7 @@ class MemorySession{
    {field:'strategies',id:'pmm-strategies',prompt:'Did you use any strategies to remember the words?',kind:'text'}
   ];
   const index=this.postQuestionIndex,question=questions[index];
-  if(!question){this.finish();return;}
+  if(!question){this.showDebrief();return;}
   const value=this.postQuestions[question.field]||'';
   const control=question.kind==='text'
    ? `<textarea class="pmm-textarea pmm-post-textarea" id="${question.id}" ${question.placeholder?`placeholder="${safe(question.placeholder)}"`:''}>${safe(value)}</textarea>`
@@ -352,7 +366,7 @@ class MemorySession{
    <p class="pmm-hint">Question ${index+1} of ${questions.length}</p>
    <label class="pmm-q-label" for="${question.id}">${safe(question.prompt)}</label>
    ${control}
-   <div class="pmm-actions"><button type="submit" class="pmm-btn">${index===questions.length-1?'Finish experiment':'Next'}</button></div>
+   <div class="pmm-actions"><button type="submit" class="pmm-btn">${index===questions.length-1?'Continue to debriefing':'Next'}</button></div>
    </form>`);
   this.element.querySelector('#pmm-post').onsubmit=e=>{
    e.preventDefault();
@@ -362,6 +376,20 @@ class MemorySession{
    this.checkpoint('post_question',{question_index:index+1,field:question.field,response:input.value});
    this.postQuestionIndex++;
    this.showPostQuestionPage();
+  };
+ }
+ showDebrief(){
+  this.phase='debrief';this.debriefShownAt=new Date().toISOString();
+  this.checkpoint('debrief_shown',{shown_at:this.debriefShownAt});
+  this.render('Debriefing',`<p>Thank you for participating in this study.</p>
+   <p>We are examining how <strong>relations among studied words influence memory under full or divided attention</strong>.</p>
+   <p>Some studied words were related to other words presented earlier, whereas others were unrelated. In the divided-attention condition, participants also identified tones while studying some of the words.</p>
+   <p>Select the button below to save your responses and return to Prolific.</p>
+   <div class="pmm-actions"><button type="button" class="pmm-btn" id="pmm-debrief-finish">Finish and submit responses</button></div>`);
+  this.element.querySelector('#pmm-debrief-finish').onclick=()=>{
+   this.debriefAcknowledgedAt=new Date().toISOString();
+   this.checkpoint('debrief_acknowledged',{acknowledged_at:this.debriefAcknowledgedAt});
+   this.finish();
   };
  }
  finish(){this.ended=true;this.phase='completed';this.finishedAt=new Date().toISOString();
@@ -377,8 +405,9 @@ class MemorySession{
   pair_assignments:this.plan.lists.flatMap(list=>list.pairs),started_at:this.startedAt,ended_at:this.finishedAt||null,
   instructions:this.instructionEvents,study_trials:this.studyTrialRows,tone_responses:this.toneRows,
   memory_responses:this.memoryRows,free_recall_word_responses:this.freeWordRows,free_recall_p1_scoring:this.freeTargetRows,list_summaries:this.listSummaries,
-  visibility_events:this.visibilityEvents,fullscreen_events:this.fullscreenEvents,extra_keypresses:this.extraToneKeys,checkpoint_errors:this.checkpointErrors,post_questions:this.postQuestions};}
- destroy(){clearTimeout(this.timer);document.removeEventListener('keydown',this.studyKey);document.removeEventListener('visibilitychange',this.visibilityHandler);
+  visibility_events:this.visibilityEvents,fullscreen_events:this.fullscreenEvents,extra_keypresses:this.extraToneKeys,checkpoint_errors:this.checkpointErrors,post_questions:this.postQuestions,
+  debrief_shown_at:this.debriefShownAt||null,debrief_acknowledged_at:this.debriefAcknowledgedAt||null};}
+ destroy(){clearTimeout(this.timer);this.removeStudyOverlay();document.removeEventListener('keydown',this.studyKey);document.removeEventListener('visibilitychange',this.visibilityHandler);
   if(this.audio&&this.audio.state!=='closed')this.audio.close().catch(()=>{});}
 }
 function mount(el,opts){return new MemorySession(el,opts);}
