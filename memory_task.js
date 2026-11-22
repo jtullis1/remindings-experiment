@@ -3,7 +3,7 @@
    Browser-first prototype; never uploads data. 2026-11. */
 (function(root){
 'use strict';
-const VERSION='memory-task-v2.6';
+const VERSION='memory-task-v2.8';
 const CSS=`
 .pmm-root,.pmm-root *{box-sizing:border-box}
 .pmm-root{position:fixed;inset:0;z-index:10;width:100vw;height:100vh;min-height:100vh;overflow-y:auto;background:#f2f5fa;color:#1b324b;font:16px/1.55 system-ui,-apple-system,Segoe UI,Arial,sans-serif;padding:28px 12px}
@@ -50,13 +50,26 @@ function parseFree(s){return [...new Set(String(s??'').split(/[\n,;]+/).map(norm
 function csv(v){return '"'+String(v===undefined||v===null?'':v).replaceAll('"','""')+'"';}
 function download(name,data,mime){const blob=new Blob([data],{type:mime});const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1200);}
 function seedHash(input){let x=2166136261>>>0;for(const ch of String(input)){x^=ch.charCodeAt(0);x=Math.imul(x,16777619)>>>0;}return x>>>0;}
-function assignmentForId(pid,params){const seed=params.get('seed')||'subject-'+pid;
- let idx=seedHash(pid+'|between-participants')%4;
- const test=params.get('test');const attention=params.get('attention');
- const testType=['free','cued'].includes(test)?test:(idx%2?'cued':'free');
- const att=['full','divided'].includes(attention)?attention:(Math.floor(idx/2)?'divided':'full');
- const cb=params.get('cb');const counterbalanceVersion=(cb==='0'||cb==='1')?Number(cb):(seedHash(pid+'|counterbalance')%2);
- return {seed,testType,attention:att,counterbalanceVersion};}
+function assignmentForId(pid,params){
+ const seed=params.get('seed')||'subject-'+pid;
+ // Online participants receive a balanced condition number from DataPipe after consenting.
+ // Local/offline previews retain deterministic assignment and optional overrides for testing.
+ const onlineAssignment=root.PairedMemoryAssignment;
+ const isLive=root.location.protocol==='https:'&&!['localhost','127.0.0.1'].includes(root.location.hostname);
+ if(isLive && (!onlineAssignment || !Number.isInteger(onlineAssignment.conditionNumber) ||
+                onlineAssignment.conditionNumber<0 || onlineAssignment.conditionNumber>3)){
+  throw new Error('Missing DataPipe condition assignment; do not start the memory task.');
+ }
+ const idx=isLive?onlineAssignment.conditionNumber:(seedHash(pid+'|between-participants')%4);
+ const test=params.get('test'),attention=params.get('attention');
+ // Test overrides are available in offline previews only, never in a live Prolific session.
+ const testType=(!isLive&&['free','cued'].includes(test))?test:(idx%2?'cued':'free');
+ const att=(!isLive&&['full','divided'].includes(attention))?attention:(Math.floor(idx/2)?'divided':'full');
+ const cb=params.get('cb');
+ const counterbalanceVersion=(!isLive&&(cb==='0'||cb==='1'))?Number(cb):(seedHash(pid+'|counterbalance')%2);
+ return {seed,testType,attention:att,counterbalanceVersion,
+  conditionNumber:isLive?idx:null,assignmentSource:isLive?'datapipe_sequence':'offline_test_hash'};
+}
 class MemorySession{
  constructor(element,opts={}){
   this.element=element;this.opts=opts;this.plan=opts.plan;
@@ -71,6 +84,15 @@ class MemorySession{
   };
   document.addEventListener('keydown',this.studyKey);document.addEventListener('visibilitychange',this.visibilityHandler);
   this.showInstruction();
+ }
+ checkpoint(eventType,payload){
+  // Each tiny event (<16 KiB) is streamed by DataPipe as soon as it is written;
+  // the original full nested JSON session is still included at task completion.
+  if(typeof this.opts.onProgress==='function'){
+   this.opts.onProgress({phase:'memory_checkpoint',event_type:eventType,
+     participant_id:this.opts.participantId||null,
+     assignment:this.plan.assignment,recorded_at:new Date().toISOString(),...payload});
+  }
  }
  render(title,html){ensureStyles();this.element.innerHTML=`<div class="pmm-root"><main class="pmm-card"><h1>${title}</h1>${html}</main></div>`;}
  showInstruction(){
@@ -174,10 +196,12 @@ class MemorySession{
    timing_deviation_ms:Math.round(elapsedMs-wordDuration),
    observed_hidden_during_list:this.visibilityEvents.some(v=>v.list===t.list),
    tone_1_correct:flattened[0]?.correct??null,tone_2_correct:flattened[1]?.correct??null});
+  const finishedWord=this.studyTrialRows.at(-1);
   this.studyIndex++;
-  // Immediately replace the previous word: no interstimulus interval.
+  // Immediately replace the previous word before checkpoint overhead: zero intended ISI.
   if(this.studyIndex<this.plan.lists[this.listIndex].trials.length)this.showStudyTrial();
   else this.finishStudy();
+  this.checkpoint('study_word',{list:t.list,study_position:t.position,study_trial:finishedWord,tone_responses:flattened});
  }
  finishStudy(){this.phase='test-instructions';this.current=null;
   const cued=this.plan.assignment.test_type==='cued';
@@ -215,6 +239,7 @@ class MemorySession{
     response:raw,normalized_response:normal,typed_letter_count:typedLetters,correct:normal===normalized(cue.target_p1),
     omission:normal==='',response_time_ms:Math.round(performance.now()-this.testStart),
     test_position:cue.test_position,p1_position:cue.p1_position});
+   this.checkpoint('cued_recall',{list:list.list,response:this.memoryRows.at(-1)});
    this.cuedIndex++;this.showCued();
   };
  }
@@ -252,6 +277,7 @@ class MemorySession{
     rt_from_recall_start_ms:Math.round(now-this.testStart),
     rt_since_previous_submission_ms:Math.round(now-this.lastFreeSubmissionAt)};
    this.freeCurrentEntries.push(row);this.freeWordRows.push(row);
+   this.checkpoint('free_recall_word',{list:list.list,response:row});
    this.lastFreeSubmissionAt=now;
    input.value=''; // Do not show submitted words or a cumulative recall list.
    status.classList.remove('pmm-free-error');status.textContent='';
@@ -270,6 +296,8 @@ class MemorySession{
     recalled_words:words,recalled_count:words.length,total_submissions:this.freeCurrentEntries.length,
     p1_recalled:p1s.filter(w=>wordset.has(w)).length,p1_total:16,
     response_time_ms:Math.round(performance.now()-this.testStart)});
+   this.checkpoint('free_recall_summary',{list:list.list,summary:this.memoryRows.at(-1),
+     p1_scoring:this.freeTargetRows.filter(x=>x.list===list.list)});
    this.completeTest();
   };
  }
@@ -278,6 +306,7 @@ class MemorySession{
   const rows=this.plan.assignment.test_type==='cued'?this.memoryRows.filter(x=>x.list===list.list):this.freeTargetRows.filter(x=>x.list===list.list);
   this.listSummaries.push({list:list.list,test_type:this.plan.assignment.test_type,p1_correct_or_recalled:rows.filter(x=>x.correct===true||x.recalled===true).length,p1_total:16,
    ended_at:new Date().toISOString()});
+  this.checkpoint('list_complete',{list:list.list,summary:this.listSummaries.at(-1)});
   this.listIndex++;
   if(this.listIndex>=this.plan.lists.length){this.showPostTransition();return;}
   this.phase='between-lists';
@@ -323,6 +352,7 @@ class MemorySession{
    const input=this.element.querySelector('#'+question.id);
    if(!input.reportValidity())return;
    this.postQuestions[question.field]=input.value;
+   this.checkpoint('post_question',{question_index:index+1,field:question.field,response:input.value});
    this.postQuestionIndex++;
    this.showPostQuestionPage();
   };
@@ -353,7 +383,11 @@ class MemoryTaskPlugin{
   const params=new URLSearchParams(root.location.search);
   const spec=assignmentForId(pid,params);
   const plan=root.PairedMemoryGenerator.generate({stimuli:root.PAIRED_MEMORY_STIMULI,...spec});
-  this.controller=mount(display_element,{plan,participantId:pid,onComplete:data=>this.jsPsych.finishTrial(data)});
+  this.controller=mount(display_element,{plan,participantId:pid,
+   // These event checkpoints cause @jspsych/extension-pipe to stage the data as the
+   // long-running custom trial progresses, not just after all four lists finish.
+   onProgress:record=>this.jsPsych.data.write(record),
+   onComplete:data=>this.jsPsych.finishTrial(data)});
  }
 }
 root.PairedMemoryTask={VERSION,MemorySession,mount,assignmentForId,parseFree,normalized,MemoryTaskPlugin};

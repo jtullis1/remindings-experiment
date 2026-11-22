@@ -1,19 +1,23 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Word memory experiment — DataPipe integration v2.5</title>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Word memory experiment — Prolific pilot v2.8</title>
 <link rel="stylesheet" href="https://unpkg.com/jspsych@8.2.2/css/jspsych.css"/>
 <script src="https://unpkg.com/jspsych@8.2.2"></script>
 <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response@2.2.0"></script>
 <script src="https://unpkg.com/@jspsych/extension-pipe@0.2.0"></script>
 <script src="consent_page.js"></script><script src="tone_training.js"></script><script src="stimuli.js"></script><script src="list_generator.js"></script><script src="memory_task.js"></script>
 </head><body><script>
-// DataPipe experiment created by the researcher. Do not put Prolific IDs in filenames.
+// DataPipe experiment created by the researcher. Never include Prolific IDs in filenames.
 const DATAPIPE_EXPERIMENT_ID = 'MwRoa1tkpwZQ';
-const offlinePreview = location.protocol !== 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname);
-// HTTPS-hosted studies automatically save; offline/local previews never contact live DataPipe.
+// Paste the EXACT completion URL from the Prolific study setup before recruitment.
+// Deliberately left blank until the study has been created. Never invent a code.
+const PROLIFIC_COMPLETION_URL = 'https://app.prolific.com/submissions/complete?cc=CLCJWYSM';
+const offlinePreview = location.protocol !== 'https:' || ['localhost','127.0.0.1'].includes(location.hostname);
 const subjectFileId = 's_' + (
   (globalThis.crypto && typeof crypto.randomUUID === 'function')
     ? crypto.randomUUID().replaceAll('-', '')
     : Math.random().toString(36).slice(2) + Date.now().toString(36)
 );
+// Set by DataPipe after consent, before tone training. No silent online fallback.
+window.PairedMemoryAssignment = null;
 const jsPsych = initJsPsych({
   extensions: [{
     type: jsPsychExtensionPipe,
@@ -24,18 +28,24 @@ const jsPsych = initJsPsych({
       stream: true,
       enabled: !offlinePreview,
       wait_message: '<p>Saving your responses. Please do not close this page.</p>',
-      done_message: '<p>Thank you for completing the experiment.</p><p>You may close this page.</p>',
+      done_message: '<p>Your responses have been saved.</p><p>Returning you to Prolific. Please do not close this page.</p>',
       on_save: (result) => {
         if (!result.ok) {
           document.body.innerHTML = '<main style="max-width:650px;margin:15vh auto;font:18px system-ui;padding:25px"><h2>There was a problem saving your responses</h2><p>Please do not close this page. Contact the researcher at <a href="mailto:tullis@arizona.edu">tullis@arizona.edu</a>.</p></main>';
           console.error('DataPipe final save failed:', result);
+          return;
+        }
+        // Only send a completed, consented session back to Prolific after DataPipe
+        // CONFIRMS the final submission was accepted (200 or queued 202).
+        if (!offlinePreview && PairedMemoryConsent.state.consented &&
+            jsPsych.data.get().filter({phase:'word_study_and_recall'}).count()===1 &&
+            PROLIFIC_COMPLETION_URL.startsWith('https://app.prolific.com/submissions/complete?cc=')) {
+          window.location.assign(PROLIFIC_COMPLETION_URL);
         }
       }
     }
   }],
   on_finish: () => {
-    // Do NOT redirect to Prolific yet: a real Prolific completion code hasn't been supplied.
-    // Once set up, a tested completion URL can be added here.
     if (offlinePreview) {
       const data = jsPsych.data.get().json();
       const blob = new Blob([data], {type:'application/json'});
@@ -44,14 +54,52 @@ const jsPsych = initJsPsych({
     }
   }
 });
+
+// A four-condition 2x2 mapping. DataPipe rotates 0,1,2,3. This balances
+// allocations, not necessarily completed sessions; it is not true randomization.
+const conditionAssignmentTrial = {
+  type:jsPsychHtmlKeyboardResponse,
+  stimulus:'<main style="padding:4rem 1rem;text-align:center;font:18px system-ui"><h2>Preparing the experiment</h2><p>Connecting to the experiment server…</p></main>',
+  choices:'NO_KEYS',
+  conditional_function:()=>PairedMemoryConsent.state.consented===true,
+  on_load: async () => {
+    const pid=PairedMemoryConsent.state.prolificPid;
+    try {
+      let conditionNumber;
+      if(offlinePreview){
+        // Preview only: use deterministic condition mapping without contacting DataPipe.
+        conditionNumber=PairedMemoryTask.assignmentForId(pid,new URLSearchParams(location.search)).conditionNumber;
+        // assignmentForId returns null in preview; compute the matching test mapping below.
+        const preview=PairedMemoryTask.assignmentForId(pid,new URLSearchParams(location.search));
+        conditionNumber=(preview.attention==='divided'?2:0)+(preview.testType==='cued'?1:0);
+      }else{
+        conditionNumber=await jsPsychExtensionPipe.getCondition(DATAPIPE_EXPERIMENT_ID);
+      }
+      if(!Number.isInteger(conditionNumber)||conditionNumber<0||conditionNumber>3){
+        throw new Error('Unexpected condition number: '+String(conditionNumber));
+      }
+      window.PairedMemoryAssignment={conditionNumber,source:offlinePreview?'preview':'datapipe_sequence'};
+      jsPsych.finishTrial({phase:'condition_assignment',condition_number:conditionNumber,
+        test_type:conditionNumber%2?'cued':'free',
+        attention:Math.floor(conditionNumber/2)?'divided':'full',
+        assignment_source:window.PairedMemoryAssignment.source,
+        participant_id:pid,assigned_at:new Date().toISOString()});
+    }catch(error){
+      console.error('Could not assign condition:',error);
+      document.querySelector('.jspsych-display-element').innerHTML =
+        '<main style="max-width:700px;padding:4rem 1rem;margin:auto;font:18px system-ui"><h2>Unable to start the experiment</h2><p>We could not connect to the study server. Please do not continue or restart repeatedly. Contact <a href="mailto:tullis@arizona.edu">tullis@arizona.edu</a> or return to Prolific for instructions.</p></main>';
+    }
+  }
+};
 const consent = PairedMemoryConsent.makeJsPsychTrial(jsPsych);
 const training = {timeline: [{type: PairedMemoryToneTraining.ToneTrainingPlugin}],
   conditional_function: () => PairedMemoryConsent.state.consented === true};
 const memory = {timeline: [{type: PairedMemoryTask.MemoryTaskPlugin}],
   conditional_function: () => PairedMemoryConsent.state.consented === true &&
+    (offlinePreview || Number.isInteger(window.PairedMemoryAssignment?.conditionNumber)) &&
     jsPsych.data.get().filter({criterion_passed:true}).count() > 0};
 const declined = {timeline: [{type:jsPsychHtmlKeyboardResponse,
   stimulus: PairedMemoryConsent.declineMarkup(), choices:'NO_KEYS'}],
   conditional_function: () => PairedMemoryConsent.state.consented !== true};
-jsPsych.run([consent,training,memory,declined]);
+jsPsych.run([consent,conditionAssignmentTrial,training,memory,declined]);
 </script></body></html>
