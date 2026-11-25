@@ -3,7 +3,7 @@
    Provides progress checkpoints and a complete trial record for jsPsych/DataPipe. 2026-11. */
 (function(root){
 'use strict';
-const VERSION='memory-task-v3.1';
+const VERSION='memory-task-v3.2';
 const CSS=`
 .pmm-root,.pmm-root *{box-sizing:border-box}
 .pmm-root{position:fixed;inset:0;z-index:10;width:100vw;height:100vh;min-height:100vh;overflow-y:auto;background:#f2f5fa;color:#1b324b;font:16px/1.55 system-ui,-apple-system,Segoe UI,Arial,sans-serif;padding:28px 12px}
@@ -78,6 +78,7 @@ class MemorySession{
   if(!this.plan||!root.PairedMemoryGenerator.validate(this.plan).ok)throw new Error('A validated study plan is required.');
   this.audio=null;this.step=0;this.listIndex=0;this.studyIndex=0;this.cuedIndex=0;this.current=null;
   this.currentSlots=[];this.timer=null;this.studyOverlay=null;this.ended=false;this.phase='instructions';
+  this.listStartPending=false;this.wordTimerToken=0;
   this.studyTrialRows=[];this.toneRows=[];this.memoryRows=[];this.freeTargetRows=[];this.freeWordRows=[];this.listSummaries=[];
   this.instructionEvents=[];this.visibilityEvents=[];this.fullscreenEvents=[];this.extraToneKeys=[];this.checkpointErrors=[];this.postQuestions=null;
   this.startedAt=new Date().toISOString();this.studySessionStart=null;
@@ -138,14 +139,30 @@ class MemorySession{
   catch(e){this.render('Audio unavailable','<p>Unable to play the tones. Please check your audio and reload the page.</p>');return false;}
  }
  async startList(){
-  if(this.ended)return;
-  // Both requests are initiated while the Begin word list click still carries user activation.
-  const fullscreenRequest=this.tryFullscreen();
-  const audioRequest=this.prepareAudio();
-  const [fullscreenEntered,audioReady]=await Promise.all([fullscreenRequest,audioRequest]);
-  if(!audioReady)return;
-  this.phase='study';this.studyIndex=0;this.studySessionStart=performance.now();
-  this.showStudyTrial();
+  // Take the lock synchronously, before any asynchronous fullscreen/audio work.
+  // Only a fresh instruction/next-list screen is allowed to start a list.
+  if(this.ended || this.listStartPending || this.phase==='study')return;
+  if(!(this.phase==='between-lists' || (this.phase==='instructions' && this.step>=3)))return;
+  this.listStartPending=true;
+  this.phase='preparing-study';
+  const startButton=this.element.querySelector('#pmm-continue, #pmm-next-list');
+  if(startButton){startButton.disabled=true;startButton.blur();}
+  try{
+   // Both requests are initiated while the Begin word list click still carries user activation.
+   const fullscreenRequest=this.tryFullscreen();
+   const audioRequest=this.prepareAudio();
+   const [,audioReady]=await Promise.all([fullscreenRequest,audioRequest]);
+   if(!audioReady){this.phase='audio-unavailable';return;}
+   if(this.ended)return;
+   this.phase='study';this.studyIndex=0;this.studySessionStart=performance.now();
+   this.showStudyTrial();
+  }catch(err){
+   this.phase='audio-unavailable';
+   console.error('Unable to start study list:',err);
+   this.render('Unable to start word list','<p>We could not start this word list. Please reload the experiment.</p>');
+  }finally{
+   this.listStartPending=false;
+  }
  }
  showStudyTrial(){
   const list=this.plan.lists[this.listIndex],t=list.trials[this.studyIndex];
@@ -181,7 +198,10 @@ class MemorySession{
    }
   }
   const wordDuration=this.opts.testWordDurationMs??t.word_duration_ms;
-  this.timer=setTimeout(()=>this.finishStudyTrial(),wordDuration);
+  // Invalidate any older timer before scheduling this word's deadline.
+  clearTimeout(this.timer);
+  const timerToken=++this.wordTimerToken;
+  this.timer=setTimeout(()=>this.finishStudyTrial(timerToken),wordDuration);
  }
  handleStudyKey(e){
   if(this.phase!=='study'||e.repeat||!['1','2','3'].includes(e.key))return;
@@ -193,8 +213,9 @@ class MemorySession{
   if(slot.response_key!==null){this.extraToneKeys.push({list:this.listIndex+1,study_position:this.studyIndex+1,key:e.key,reason:'duplicate_response',tone_number:ix+1});return;}
   slot.response_key=e.key;slot.correct=e.key===String(slot.meta.key);slot.omission=false;slot.rt_ms=Math.round(now-slot.onset);
  }
- finishStudyTrial(){
-  if(this.phase!=='study')return;
+ finishStudyTrial(timerToken){
+  if(this.phase!=='study' || timerToken!==this.wordTimerToken)return;
+  this.timer=null;
   const t=this.current;
   const elapsedMs=performance.now()-this.currentStart;
   const wordDuration=this.opts.testWordDurationMs??t.word_duration_ms;
@@ -222,7 +243,7 @@ class MemorySession{
  removeStudyOverlay(){
   if(this.studyOverlay){this.studyOverlay.remove();this.studyOverlay=null;}
  }
- finishStudy(){this.removeStudyOverlay();this.phase='test-instructions';this.current=null;
+ finishStudy(){clearTimeout(this.timer);this.timer=null;this.removeStudyOverlay();this.phase='test-instructions';this.current=null;
   const cued=this.plan.assignment.test_type==='cued';
   this.render('You finished studying this list',cued?
    `<p>Next, you will take a memory test.</p><p>You will see a <strong>cue word</strong> related to one specific word you studied, along with the <strong>first letter</strong> of that studied word.</p><p>Type the <strong>full studied word</strong>. Enter at least <strong>3 letters</strong> before continuing to the next cue.</p><p class="pmm-hint">Take as much time as you need.</p><div class="pmm-actions"><button class="pmm-btn" id="pmm-test-start">Begin memory test</button></div>`:
